@@ -1,22 +1,11 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:id="@+id/menu_scan"
-          android:title="@string/menuScan"
-          android:orderInCategory="100"
-          android:showAsAction="ifRoom|withText"/>
-    <item android:id="@+id/menu_msg1"
-          android:title="MSG 1"
+    <item android:id="@+id/menuBromptonBike"
+          android:title="@string/menuBike1"
           android:orderInCategory="100"
           android:showAsAction="withText"/>
-    <item android:id="@+id/menu_msg2"
-          android:title="MSG 2"
+    <item android:id="@+id/menuMockbike"
+          android:title="@string/menuBike2"
           android:orderInCategory="100"
           android:showAsAction="withText"/>
-    <item android:id="@+id/menu_msg3"
-          android:title="MSG 3"
-          android:orderInCategory="100"
-          android:showAsAction="withText"/>
-    <item android:id="@+id/menu_msg4"
-          android:title="MSG 4"
-          android:orderInCategory="100"
-          android:showAsAction="withText"/>
+
 </menu>

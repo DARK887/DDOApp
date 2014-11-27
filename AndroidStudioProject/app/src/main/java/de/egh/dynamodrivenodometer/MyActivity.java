@@ -11,13 +11,13 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -25,122 +25,30 @@ import android.widget.Toast;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
+import de.egh.dynamodrivenodometer.Exceptions.EghBluetoothLeNotSupported;
+import de.egh.dynamodrivenodometer.Exceptions.EghBluetoothNotSupported;
+
+import static de.egh.dynamodrivenodometer.DeviceType.DDO;
+import static de.egh.dynamodrivenodometer.R.id.menuMockbike;
+
 
 public class MyActivity extends Activity {
 
-
 	// This name must be set in the RFDuino
 	private static final String TAG = MyActivity.class.getSimpleName();
+	private static final SimpleDateFormat mSdf = new SimpleDateFormat("dd.MM HH:mm:ss");
 	//Last time a distance value has been received as timestamp
-	private long dodLastUpdateAt;
+	private long mDodLastUpdateAt;
 	//Distance in meters
-	private long dodDistanceValue;
+	private long mDistance;
 	//Messages from the device
-	private MessageBox messageBox;
-	private SimpleDateFormat sdf = new SimpleDateFormat("dd.MM HH:mm:ss");
-	private TextView distanceValueView;
-	private TextView connectedToView;
-	private TextView lastUpdateAtView;
-	private TextView messageView;
-
-	/**
-	 * Stops scan after given period
-	 */
-	private Runnable runnableStopScan;
-
-	/**
-	 * Restart the read
-	 */
-	private Runnable runnableValueReadJob;
-
-	/**
-	 * Is NULL when service is disconnected.
-	 */
-	private BluetoothLeService mBluetoothLeService;
-
-	// Code to manage Service lifecycle.
-	private final ServiceConnection mServiceConnection = new ServiceConnection() {
-
-		@Override
-		public void onServiceConnected(ComponentName componentName, IBinder service) {
-			Log.v(TAG, "onServiceConnected()");
-			mBluetoothLeService = ((BluetoothLeService.LocalBinder) service).getService();
-			if (!mBluetoothLeService.initialize()) {
-				Log.e(TAG, "Unable to initialize Bluetooth");
-				finish();
-			}
-
-			//Verschoben aus onResume()
-			scanLeDevice(true);
-
-		}
-
-		@Override
-		public void onServiceDisconnected(ComponentName componentName) {
-			mBluetoothLeService = null;
-		}
-	};
-
-
-	/**
-	 * TRUE, if Device can be used for reading value data
-	 */
-	private boolean mGattAvailable = false;
-
-	/**
-	 * Receices GATT messages.
-	 */
-	private final BroadcastReceiver mGattUpdateReceiver = new BroadcastReceiver() {
-		@Override
-		public void onReceive(Context context, Intent intent) {
-			Log.v(TAG, "onReceive() ...");
-			final String action = intent.getAction();
-
-			// Status change to connected
-			if (BluetoothLeService.ACTION_GATT_CONNECTED.equals(action)) {
-				Log.v(TAG, "GATT connected.");
-				updateConnectionState(getString(R.string.gattConnectedTrue));
-				invalidateOptionsMenu();
-			}
-
-			// Status change to disconnected
-			else if (BluetoothLeService.ACTION_GATT_DISCONNECTED.equals(action)) {
-				Log.v(TAG, "GATT disconnected.");
-				mGattAvailable = false;
-				updateConnectionState(getString(R.string.gattConnectedFalse));
-				invalidateOptionsMenu();
-			}
-
-			// Status state after Connected: Services available
-			else if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
-				Log.v(TAG, "GATT service discovered.");
-				// Show all the supported services and characteristics on the user interface.
-//				Log.v(TAG, "Discovered Services: " + mBluetoothLeService.getSupportedGattServices().size());
-
-				//It's time to start the periodically value read. Result will be received with
-				// ACTION_DATA_AVAILABLE
-				// Unchecked precondition: Expected RFDUINO service is available
-				mGattAvailable = true;
-
-				//It's time for our first value reading
-				mBluetoothLeService.sendValueReadNotification();
-			}
-
-			// Trigger: New data available
-			else if (BluetoothLeService.ACTION_DATA_AVAILABLE.equals(action)) {
-//				Log.v(TAG, "GATT data available.");
-				processMessage(intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
-		startJob(true);
-			}
-
-			// Default
-			else {
-				Log.v(TAG, "GATT unknown action " + action.toString() + ".");
-
-
-			}
-		}
-	};
+	private MessageBox mMessageBox;
+	private TextView mConnectedToView;
+	private TextView mCastUpdateAtView;
+	private TextView mMessageView;
+	private TextView mGattConnectedView;
+	private SharedPreferences mSettings;
+	private Switch mConnectSwitch;
 	//For timer-driven actions: Scanning end and alive-check
 	private Handler mHandler;
 	private BluetoothAdapter mBluetoothAdapter;
@@ -149,7 +57,48 @@ public class MyActivity extends Activity {
 	/**
 	 * Will be initialized with a successful scan, otherwise NULL
 	 */
-	private BluetoothDevice dodDevice;
+	private BluetoothDevice mDodDevice;
+
+
+	/**
+	 * Stops scan after given period
+	 */
+	private Runnable mRunnableStopScan;
+
+	/**
+	 * Restart the read
+	 */
+	private Runnable mRunnableValueReadJob;
+
+	/**
+	 * Is NULL when service is disconnected.
+	 */
+	private DeviceService mService;
+
+	// Code to manage Service lifecycle.
+	private final ServiceConnection mServiceConnection = new ServiceConnection() {
+
+		@Override
+		public void onServiceConnected(ComponentName componentName, IBinder service) {
+			Log.v(TAG, "onServiceConnected()");
+			mService = ((DeviceService.LocalBinder) service).getService();
+			if (!mService.initialize()) {
+				Log.e(TAG, "Unable to initialize Bluetooth");
+				finish();
+			}
+
+			//Verschoben aus onResume()
+			scanLeDevice(true);
+
+			updateUI();
+
+		}
+
+		@Override
+		public void onServiceDisconnected(ComponentName componentName) {
+			mService = null;
+		}
+	};
 	// Device scan callback.
 	private BluetoothAdapter.LeScanCallback mLeScanCallback =
 			new BluetoothAdapter.LeScanCallback() {
@@ -161,14 +110,14 @@ public class MyActivity extends Activity {
 						public void run() {
 							Log.v(TAG, "LeScanCallback.onLeScan found " + device.toString());
 							//Connect to the RFDuino!
-							if (device.getName().equals(Constants.Device.NAME)) {
+							if (device.getName().equals(MyActivity.Constants.Device.NAME)) {
 
-								dodDevice = device;
+								mDodDevice = device;
 								stopLeDeviceScan();
-								connectedToView.setText(getString(R.string.dodConnectedTrue));
+								mConnectedToView.setText(getString(R.string.dodConnectedTrue));
 								// Automatically connects to the device upon successful start-up initialization.
-								if (mBluetoothLeService != null) {
-									mBluetoothLeService.connect(dodDevice.getAddress());
+								if (mService != null) {
+									mService.connect(mDodDevice.getAddress());
 								} else {
 									Log.v(TAG, "Missing Service, can't connect device.");
 								}
@@ -177,16 +126,81 @@ public class MyActivity extends Activity {
 					});
 				}
 			};
-	private TextView gattConnectedView;
-	private SharedPreferences settings;
-	private Switch switchPermanent;
+	/**
+	 * TRUE, if Device can be used for reading value data
+	 */
+	private boolean mGattAvailable = false;
+	/**
+	 * Receices GATT messages.
+	 */
+	private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
+		@Override
+		public void onReceive(Context context, Intent intent) {
+			Log.v(TAG, "onReceive() ...");
+			final String action = intent.getAction();
+
+			// Status change to connected
+			if (DeviceService.Constants.Actions.ACTION_GATT_CONNECTED.equals(action)) {
+				Log.v(TAG, "GATT connected.");
+				updateConnectionState(getString(R.string.gattConnectedTrue));
+				invalidateOptionsMenu();
+			}
+
+			// Status change to disconnected
+			else if (DeviceService.Constants.Actions.ACTION_GATT_DISCONNECTED.equals(action)) {
+				Log.v(TAG, "GATT disconnected.");
+				mGattAvailable = false;
+				updateConnectionState(getString(R.string.gattConnectedFalse));
+				invalidateOptionsMenu();
+			}
+
+			// Status state after Connected: Services available
+			else if (DeviceService.Constants.Actions.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
+				Log.v(TAG, "GATT service discovered.");
+				// Show all the supported services and characteristics on the user interface.
+//				Log.v(TAG, "Discovered Services: " + mService.getSupportedGattServices().size());
+
+				//It's time to start the periodically value read. Result will be received with
+				// ACTION_DATA_AVAILABLE
+				// Unchecked precondition: Expected RFDUINO service is available
+				mGattAvailable = true;
+
+				//It's time for our first value reading
+				mService.sendValueReadNotification();
+			}
+
+			// Trigger: New data available
+			else if (DeviceService.Constants.Actions.ACTION_VALUE_AVAILABLE.equals(action)) {
+//				Log.v(TAG, "GATT data available.");
+				processMessage(intent.getStringExtra(DeviceService.Constants.Broadcast.DATA));
+				startJob(true);
+			}
+
+			// Activity has to switch BT on
+		else if(DeviceService.Constants.Actions.ACTION_BLUETOOTH_NEEDED.equals(action)){
+				//Switch on Bluetooth
+				if ((((BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter()).isEnabled()) {
+					Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+					startActivityForResult(enableBtIntent, MyActivity.Constants.Bluetooth.REQUEST_ENABLE_BT);
+				}
+			}
+
+			// Default should never reached
+			else {
+				Log.v(TAG, "Unknown broadcast action " + action.toString() + ".");
+
+
+			}
+		}
+	};
+	private TextView mDistanceValueView;
 
 	private static IntentFilter makeGattUpdateIntentFilter() {
 		final IntentFilter intentFilter = new IntentFilter();
-		intentFilter.addAction(BluetoothLeService.ACTION_GATT_CONNECTED);
-		intentFilter.addAction(BluetoothLeService.ACTION_GATT_DISCONNECTED);
-		intentFilter.addAction(BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED);
-		intentFilter.addAction(BluetoothLeService.ACTION_DATA_AVAILABLE);
+		intentFilter.addAction(DeviceService.Constants.Actions.ACTION_GATT_CONNECTED);
+		intentFilter.addAction(DeviceService.Constants.Actions.ACTION_GATT_DISCONNECTED);
+		intentFilter.addAction(DeviceService.Constants.Actions.ACTION_GATT_SERVICES_DISCOVERED);
+		intentFilter.addAction(DeviceService.Constants.Actions.ACTION_VALUE_AVAILABLE);
 		return intentFilter;
 	}
 
@@ -196,17 +210,17 @@ public class MyActivity extends Activity {
 	private void startJob(boolean start) {
 //		Log.v(TAG, "startJob");
 		if (start) {
-			runnableValueReadJob = new Runnable() {
+			mRunnableValueReadJob = new Runnable() {
 				@Override
 				public void run() {
 //					Log.v(TAG, "Job ended!");
-					if (mBluetoothLeService != null && mGattAvailable == true) {
-						mBluetoothLeService.sendValueReadNotification();
+					if (mService != null && mGattAvailable == true) {
+						mService.sendValueReadNotification();
 					}
 				}
 			};
 			// Refresh every 1 Second
-			mHandler.postDelayed(runnableValueReadJob, 1000);
+			mHandler.postDelayed(mRunnableValueReadJob, 1000);
 		}
 	}
 
@@ -232,9 +246,9 @@ public class MyActivity extends Activity {
 				//Expecting the wheel rotation number as long value
 				try {
 					value = Long.valueOf(dataContent);
-					dodDistanceValue = value;
-					dodLastUpdateAt = System.currentTimeMillis();
-//					Log.v(TAG, "Value=" + dodDistanceValue);
+					mDistance = value;
+					mDodLastUpdateAt = System.currentTimeMillis();
+//					Log.v(TAG, "Value=" + mDistance);
 
 				} catch (Exception e) {
 					Log.v(TAG, "Caught exception: Not a long value >>>" + dataContent + "<<<");
@@ -261,7 +275,7 @@ public class MyActivity extends Activity {
 		}
 
 		if (message != null) {
-			messageBox.add(message);
+			mMessageBox.add(message);
 		}
 
 		updateUI();
@@ -271,13 +285,30 @@ public class MyActivity extends Activity {
 	 * Brings the received data to the UI.
 	 */
 	private void updateUI() {
-		distanceValueView.setText(String.valueOf(dodDistanceValue));
-		lastUpdateAtView.setText("" + sdf.format(new Date(dodLastUpdateAt)));
+
+		if (mService != null) {
+			switch (mService.getDeviceType()) {
+				case DDO:
+					setTitle(R.string.deviceTypeDDO);
+					break;
+				case MOCKBIKE:
+					setTitle(R.string.deviceTypeMockbike);
+					break;
+				default:
+					setTitle(R.string.app_name);
+			}
+		} else {
+			setTitle(R.string.app_name);
+		}
+
+
+		mDistanceValueView.setText(String.valueOf(mDistance));
+		mCastUpdateAtView.setText("" + mSdf.format(new Date(mDodLastUpdateAt)));
 
 		String all = "";
-		for (MessageBox.Msg msg : messageBox.getSorted()) {
-			all += sdf.format(new Date(msg.getTimestamp())) + " " + msg.getText() + "\n";
-			messageView.setText(all);
+		for (MessageBox.Msg msg : mMessageBox.getSorted()) {
+			all += mSdf.format(new Date(msg.getTimestamp())) + " " + msg.getText() + "\n";
+			mMessageView.setText(all);
 		}
 	}
 
@@ -287,7 +318,7 @@ public class MyActivity extends Activity {
 	@Override
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		// User chose not to enable Bluetooth.
-		if (requestCode == Constants.Bluetooth.REQUEST_ENABLE_BT) {
+		if (requestCode == MyActivity.Constants.Bluetooth.REQUEST_ENABLE_BT) {
 			if (resultCode == Activity.RESULT_CANCELED) {
 				finish();
 				return;
@@ -302,27 +333,29 @@ public class MyActivity extends Activity {
 
 	@Override
 	protected void onStop() {
-     SharedPreferences.Editor editor = settings.edit();
-		editor.putString(Constants.SharedPrefs.MESSAGES,messageBox.asString());
-		editor.putBoolean(Constants.SharedPrefs.SWITCH_PERMANENT, switchPermanent.isChecked());
+		SharedPreferences.Editor editor = mSettings.edit();
+		editor.putString(MyActivity.Constants.SharedPrefs.MESSAGES, mMessageBox.asString());
+		editor.putBoolean(MyActivity.Constants.SharedPrefs.SWITCH_PERMANENT, mConnectSwitch.isChecked());
 
 		editor.commit();
+
+		super.onStop();
 	}
 
 	@Override
 	protected void onPause() {
 		super.onPause();
 
-		unregisterReceiver(mGattUpdateReceiver);
+		unregisterReceiver(mBroadcastReceiver);
 		scanLeDevice(false);
 
 		//Wieder löschen, wenn onDestroy aktiviert
 //		unbindService(mServiceConnection);
-//		mBluetoothLeService = null;
+//		mService = null;
 
 		//Wenn hier disconnected, muss man in onResume wieder connecten !?
-		if (mBluetoothLeService != null) {
-			mBluetoothLeService.close();
+		if (mService != null) {
+			mService.close();
 		}
 
 		//Store messages
@@ -336,7 +369,7 @@ public class MyActivity extends Activity {
 
 		//TEstweise nach onPause verschoben
 		unbindService(mServiceConnection);
-		mBluetoothLeService = null;
+		mService = null;
 	}
 
 	/**
@@ -347,23 +380,26 @@ public class MyActivity extends Activity {
 
 		//Switching on
 		if (enable) {
-			runnableStopScan = new Runnable() {
+			if (mService != null) {
+				mService.close();
+			}
+			mRunnableStopScan = new Runnable() {
 				@Override
 				public void run() {
 					if (mScanning) {
 						Log.v(TAG, "End of scan period: Stopping scan.");
 						mScanning = false;
 						mBluetoothAdapter.stopLeScan(mLeScanCallback);
-						connectedToView.setText(getString(R.string.dodConnectedFalse));
-						invalidateOptionsMenu();
+						mConnectedToView.setText(getString(R.string.dodConnectedFalse));
+						mConnectSwitch.setChecked(false);
 					}
 				}
 			};
 			// Stops scanning after a pre-defined scan period.
-			mHandler.postDelayed(runnableStopScan, Constants.Bluetooth.SCAN_PERIOD);
+			mHandler.postDelayed(mRunnableStopScan, MyActivity.Constants.Bluetooth.SCAN_PERIOD);
 
 			mScanning = true;
-			connectedToView.setText(getString(R.string.dodConnectedScanning));
+			mConnectedToView.setText(getString(R.string.dodConnectedScanning));
 			mBluetoothAdapter.startLeScan(mLeScanCallback);
 
 
@@ -373,21 +409,19 @@ public class MyActivity extends Activity {
 		else {
 			stopLeDeviceScan();
 		}
-
-		invalidateOptionsMenu();
 	}
 
 	/**
-	 * Removes runnableStopScan callback.
+	 * Removes mRunnableStopScan callback.
 	 */
 	private void stopLeDeviceScan() {
 		Log.v(TAG, "stopLeDeviceScan()");
 		if (mScanning) {
-			mHandler.removeCallbacks(runnableStopScan);
+			mHandler.removeCallbacks(mRunnableStopScan);
 			mScanning = false;
 			mBluetoothAdapter.stopLeScan(mLeScanCallback);
 			//Update status in view only if not connected.
-			connectedToView.setText(getString(R.string.dodConnectedFalse));
+			mConnectedToView.setText(getString(R.string.dodConnectedFalse));
 		}
 		invalidateOptionsMenu();
 	}
@@ -400,39 +434,39 @@ public class MyActivity extends Activity {
 		// Ensures Bluetooth is enabled on the device.  If Bluetooth is not currently enabled,
 		// fire an intent to display a dialog asking the user to grant permission to enable it.
 
-		//Switch on Bluetooth
-		if (!mBluetoothAdapter.isEnabled()) {
-			Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-			startActivityForResult(enableBtIntent, Constants.Bluetooth.REQUEST_ENABLE_BT);
-		}
+//		//Switch on Bluetooth
+//		if (!mBluetoothAdapter.isEnabled()) {
+//			Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+//			startActivityForResult(enableBtIntent, MyActivity.Constants.Bluetooth.REQUEST_ENABLE_BT);
+//		}
 
 		//Broadcast receiver is our service listener
-		registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
+		registerReceiver(mBroadcastReceiver, makeGattUpdateIntentFilter());
 
 		//Mal auskommentiert, da hier erst service angebunden wird
-//		if (mBluetoothLeService != null && dodDevice != null) {
-//			final boolean result = mBluetoothLeService.connect(dodDevice.getAddress());
+//		if (mService != null && mDodDevice != null) {
+//			final boolean result = mService.connect(mDodDevice.getAddress());
 //			Log.d(TAG, "Connect request result=" + result);
 //
 //		}
 //
 //		//Start automatically scanning the device
-//		if (mBluetoothAdapter.isEnabled() && dodDevice == null) {
+//		if (mBluetoothAdapter.isEnabled() && mDodDevice == null) {
 //
 //			scanLeDevice(true);
 //		}
 
 		//Verschoben von onCreate();
 //		//		Log.v(TAG,"call bindService()....");
-//		Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
+//		Intent gattServiceIntent = new Intent(this, DeviceService.class);
 ////		Log.v(TAG, "... With result="+
 //		bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
 
 		//Vielleicht geht'S ja so
-		if (dodDevice == null) {
+		if (mDodDevice == null) {
 			scanLeDevice(true);
 		} else {
-			mBluetoothLeService.connect(dodDevice.getAddress());
+			mService.connect(mDodDevice.getAddress());
 		}
 	}
 
@@ -443,7 +477,7 @@ public class MyActivity extends Activity {
 		runOnUiThread(new Runnable() {
 			@Override
 			public void run() {
-				gattConnectedView.setText(text);
+				mGattConnectedView.setText(text);
 			}
 		});
 	}
@@ -452,99 +486,114 @@ public class MyActivity extends Activity {
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_my);
-		distanceValueView = (TextView) findViewById(R.id.distanceValue);
-		connectedToView = (TextView) findViewById(R.id.connectedToValue);
-		lastUpdateAtView = (TextView) findViewById(R.id.lastUpdateValue);
-		messageView = (TextView) findViewById(R.id.messageValue);
-		gattConnectedView = (TextView) findViewById(R.id.gattConnectedValue);
-		switchPermanent = (Switch) findViewById(R.id.switchPermanent);
+		mDistanceValueView = (TextView) findViewById(R.id.distanceValue);
+		mConnectedToView = (TextView) findViewById(R.id.connectedToValue);
+		mCastUpdateAtView = (TextView) findViewById(R.id.lastUpdateValue);
+		mMessageView = (TextView) findViewById(R.id.messageValue);
+		mGattConnectedView = (TextView) findViewById(R.id.gattConnectedValue);
+		mConnectSwitch = (Switch) findViewById(R.id.connectSwitch);
 
 		//Restore values from previous run
-		dodDistanceValue = getSharedPreferences(Constants.SharedPrefs.NAME, 0).getLong(Constants.SharedPrefs.DISTANCE, 0);
-		dodLastUpdateAt = getSharedPreferences(Constants.SharedPrefs.NAME, 0).getLong(Constants.SharedPrefs.LAST_UPDATE_AT, 0);
+		mDistance = getSharedPreferences(MyActivity.Constants.SharedPrefs.NAME, 0).getLong(MyActivity.Constants.SharedPrefs.DISTANCE, 0);
+		mDodLastUpdateAt = getSharedPreferences(MyActivity.Constants.SharedPrefs.NAME, 0).getLong(MyActivity.Constants.SharedPrefs.LAST_UPDATE_AT, 0);
 
 		// Restore preferences
-		settings = getSharedPreferences(Constants.SharedPrefs.NAME, 0);
+		mSettings = getSharedPreferences(MyActivity.Constants.SharedPrefs.NAME, 0);
 
-		messageBox = new MessageBox(settings.getString(Constants.SharedPrefs.MESSAGES, null));
-		switchPermanent.setChecked( settings.getBoolean(Constants.SharedPrefs.SWITCH_PERMANENT, false));
+		mMessageBox = new MessageBox(mSettings.getString(MyActivity.Constants.SharedPrefs.MESSAGES, null));
+		mConnectSwitch.setChecked(mSettings.getBoolean(MyActivity.Constants.SharedPrefs.SWITCH_PERMANENT, false));
 
 		mHandler = new Handler();
 
-		// Use this check to determine whether BLE is supported on the device.  Then you can
-		// selectively disable BLE-related features.
-		if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
-			Toast.makeText(this, R.string.msgBleNotSupported, Toast.LENGTH_SHORT).show();
-			finish();
-		}
+//		// Use this check to determine whether BLE is supported on the device.  Then you can
+//		// selectively disable BLE-related features.
+//		if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
+//			Toast.makeText(this, R.string.msgBleNotSupported, Toast.LENGTH_SHORT).show();
+//			finish();
+//		}
 
-		// Initializes a Bluetooth adapter.  For API level 18 and above, get a reference to
-		// BluetoothAdapter through BluetoothManager.
-		final BluetoothManager bluetoothManager =
-				(BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-		mBluetoothAdapter = bluetoothManager.getAdapter();
-
-		// Checks if Bluetooth is supported on the device.
-		if (mBluetoothAdapter == null) {
-			Toast.makeText(this, R.string.msgBluetoothNotSupported, Toast.LENGTH_SHORT).show();
-			finish();
-			return;
-		}
+//		// Initializes a Bluetooth adapter.  For API level 18 and above, get a reference to
+//		// BluetoothAdapter through BluetoothManager.
+//		final BluetoothManager bluetoothManager =
+//				(BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+//		mBluetoothAdapter = bluetoothManager.getAdapter();
+//
+//		// Checks if Bluetooth is supported on the device.
+//		if (mBluetoothAdapter == null) {
+//			Toast.makeText(this, R.string.msgBluetoothNotSupported, Toast.LENGTH_SHORT).show();
+//			finish();
+//			return;
+//		}
 
 		//Verschoben nach onResume()
 //		Log.v(TAG,"call bindService()....");
-		Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
+		Intent gattServiceIntent = new Intent(this, DeviceService.class);
 //		Log.v(TAG, "... With result="+
 		bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
 
 
 	}
 
+	/**
+	 * Callback method for connect switch
+	 */
+	public void onClickConnectSwitch(View view) {
+		if (mConnectSwitch.isChecked()) {
+			Log.v(TAG, "ConnectSwitch checked");
+
+
+
+			//BT is enabled. We can start the device
+			else{
+
+
+			}
+	//		scanLeDevice(true);
+
+		} else {
+			Log.v(TAG, "ConnectSwitch unchecked");
+		//	scanLeDevice(false);
+		}
+	}
+
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
 		// Inflate the menu; this adds items to the action bar if it is present.
 		getMenuInflater().inflate(R.menu.my, menu);
-
+/*
 		if (mScanning) {
 			menu.findItem(R.id.menu_scan).setVisible(false);
-			menu.findItem(R.id.menu_refresh).setActionView(
-					R.layout.actionbar_indeterminate_progress);
+			//		menu.findItem(R.id.menu_refresh).setActionView(
+			//			R.layout.actionbar_indeterminate_progress);
 		} else {
 			menu.findItem(R.id.menu_scan).setVisible(true);
-			menu.findItem(R.id.menu_refresh).setActionView(null);
+			//		menu.findItem(R.id.menu_refresh).setActionView(null);
 		}
+	*/
 		return true;
 	}
 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
-		switch (item.getItemId()) {
-			case R.id.menu_scan:
 
-				mBluetoothLeService.close();
-				scanLeDevice(true);
-				break;
+		try {
+			switch (item.getItemId()) {
+				case R.id.menuBromptonBike:
+					mService.changeDevice(DDO, this);
+					break;
+				case menuMockbike:
+					mService.changeDevice(DeviceType.MOCKBIKE, this);
+					break;
 
-			case R.id.menu_msg1:
-				messageBox.add("Meldung 1");
-				updateUI();
-				break;
-			case R.id.menu_msg2:
-				messageBox.add("Meldung 2");
-				updateUI();
-				break;
-			case R.id.menu_msg3:
-				messageBox.add("Meldung 3");
-				updateUI();
-				break;
-			case R.id.menu_msg4:
-				messageBox.add("Meldung 4");
-				updateUI();
-				break;
+			}
+		} catch (EghBluetoothNotSupported eghBluetoothNotSupported) {
+			Toast.makeText(this, R.string.msgBluetoothNotSupported, Toast.LENGTH_SHORT).show();
+		} catch (EghBluetoothLeNotSupported eghBluetoothLeNotSupported) {
+			Toast.makeText(this, R.string.msgBleNotSupported, Toast.LENGTH_SHORT).show();
 		}
+					updateUI();
 		return true;
 	}
-
 
 	//Structure for all used Constants
 	private abstract class Constants {
@@ -562,7 +611,7 @@ public class MyActivity extends Activity {
 
 		abstract class Bluetooth {
 			//Max. Duration im milliseconds to scan for the ddo device
-			static final long SCAN_PERIOD = 3000;
+			static final long SCAN_PERIOD = 10000;
 
 			//ID for BT switch on intent
 			static final int REQUEST_ENABLE_BT = 1;

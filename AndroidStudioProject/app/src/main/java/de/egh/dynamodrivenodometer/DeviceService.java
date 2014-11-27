@@ -18,31 +18,18 @@ import android.util.Log;
 import java.util.List;
 import java.util.UUID;
 
+import de.egh.dynamodrivenodometer.Exceptions.EghBluetoothLeNotSupported;
+import de.egh.dynamodrivenodometer.Exceptions.EghBluetoothNotSupported;
+
 /**
  * Created by ChristianSchulzendor on 05.08.2014.
  */
-public class BluetoothLeService extends Service {
+public class DeviceService extends Service {
 
-	public final static String ACTION_GATT_CONNECTED =
-			"de.egh.dynamodrivenodometer.ACTION_GATT_CONNECTED";
-	public final static String ACTION_GATT_DISCONNECTED =
-			"de.egh.dynamodrivenodometer.ACTION_GATT_DISCONNECTED";
-	public final static String ACTION_GATT_SERVICES_DISCOVERED =
-			"de.egh.dynamodrivenodometer.ACTION_GATT_SERVICES_DISCOVERED";
-	public final static String ACTION_VALUE_AVAILABLE =
-			"de.egh.dynamodrivenodometer.ACTION_VALUE_AVAILABLE";
-	public final static String ACTION_MESSAGE_AVAILABLE =
-			"de.egh.dynamodrivenodometer.ACTION_MESSAGE_AVAILABLE";
-	public final static String EXTRA_DATA =
-			"de.egh.dynamodrivenodometer.EXTRA_DATA";
-	private final static String TAG = BluetoothLeService.class.getSimpleName();
-	private static final int STATE_DISCONNECTED = 0;
-	private int mConnectionState = STATE_DISCONNECTED;
-	private static final int STATE_CONNECTING = 1;
-	private static final int STATE_CONNECTED = 2;
+	private static final String TAG = DeviceService.class.getSimpleName();
 	private final IBinder mBinder = new LocalBinder();
+	private int mConnectionState = Constants.State.DISCONNECTED;
 	private boolean readJob;
-	// Implements callback methods for GATT events that the app cares about.  For example,
 	// connection change and services discovered.
 	private final BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
 
@@ -51,8 +38,8 @@ public class BluetoothLeService extends Service {
 		public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
 			String intentAction;
 			if (newState == BluetoothProfile.STATE_CONNECTED) {
-				intentAction = ACTION_GATT_CONNECTED;
-				mConnectionState = STATE_CONNECTED;
+				intentAction = Constants.Actions.ACTION_GATT_CONNECTED;
+				mConnectionState = Constants.State.CONNECTED;
 				broadcastUpdate(intentAction);
 				Log.i(TAG, "Connected to GATT server.");
 				// Attempts to discover services after successful connection.
@@ -65,8 +52,8 @@ public class BluetoothLeService extends Service {
 				readJob = false;
 
 				if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-					intentAction = ACTION_GATT_DISCONNECTED;
-					mConnectionState = STATE_DISCONNECTED;
+					intentAction = Constants.Actions.ACTION_GATT_DISCONNECTED;
+					mConnectionState = Constants.State.DISCONNECTED;
 					Log.i(TAG, "Disconnected from GATT server.");
 					broadcastUpdate(intentAction);
 				}
@@ -82,7 +69,7 @@ public class BluetoothLeService extends Service {
 		@Override
 		public void onServicesDiscovered(BluetoothGatt gatt, int status) {
 			if (status == BluetoothGatt.GATT_SUCCESS) {
-				broadcastUpdate(ACTION_GATT_SERVICES_DISCOVERED);
+				broadcastUpdate(Constants.Actions.ACTION_GATT_SERVICES_DISCOVERED);
 			} else {
 				Log.w(TAG, "onServicesDiscovered received: " + status);
 			}
@@ -104,12 +91,14 @@ public class BluetoothLeService extends Service {
 				return sb.toString();
 
 			}
+
+			return null;
 		}
 
 		private void broadcastUpdate(final String action,
 		                             final BluetoothGattCharacteristic characteristic) {
 			final Intent intent = new Intent(action);
-		intent.putExtra(EXTRA_DATA, characteristicValue(characteristic));
+			intent.putExtra(Constants.Broadcast.DATA, characteristicValue(characteristic));
 
 			sendBroadcast(intent);
 		}
@@ -122,16 +111,24 @@ public class BluetoothLeService extends Service {
 			if (status == BluetoothGatt.GATT_SUCCESS) {
 				Log.v(TAG, "Characteristic value: " + characteristic.getValue());
 				processCharacteristic(characteristic);
-				//broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
+				broadcastUpdate(Constants.Actions.ACTION_VALUE_AVAILABLE, characteristic);
 			}
 		}
 
 		@Override
 		public void onCharacteristicChanged(BluetoothGatt gatt,
 		                                    BluetoothGattCharacteristic characteristic) {
-		//	broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
+			//	broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
 		}
 	};
+	private BluetoothManager mBluetoothManager;
+	private BluetoothAdapter mBluetoothAdapter;  // Implements callback methods for GATT events that the app cares about.  For example,
+	private String mBluetoothDeviceAddress;
+	private BluetoothGatt mBluetoothGatt;
+	/**Facade to actual device*/
+private DeviceFacade mDeviceFacade;
+
+
 	/**
 	 * Analyses the value and updates storage and UI.
 	 */
@@ -155,8 +152,8 @@ public class BluetoothLeService extends Service {
 				//Expecting the wheel rotation number as long value
 				try {
 					value = Long.valueOf(dataContent);
-					dodDistanceValue = value;
-					dodLastUpdateAt = System.currentTimeMillis();
+					//dodDistanceValue = value;
+					//dodLastUpdateAt = System.currentTimeMillis();
 //					Log.v(TAG, "Value=" + dodDistanceValue);
 
 				} catch (Exception e) {
@@ -184,15 +181,28 @@ public class BluetoothLeService extends Service {
 		}
 
 		if (message != null) {
-			messageBox.add(message);
+			//messageBox.add(message);
 		}
 
 	}
 
-	private BluetoothManager mBluetoothManager;
-	private BluetoothAdapter mBluetoothAdapter;
-	private String mBluetoothDeviceAddress;
-	private BluetoothGatt mBluetoothGatt;
+/**Returns actual device type or, if no actual device type exists, NULL.*/
+ public DeviceType getDeviceType(){
+  return mDeviceFacade != null? mDeviceFacade.getDeviceType():null;
+ }
+
+	/** Call this to switch to another device. The new device will be initialized and mDeviceType will be set.*/
+	public void changeDevice(DeviceType deviceType, Context context) throws EghBluetoothNotSupported, EghBluetoothLeNotSupported {
+     switch(deviceType){
+	     case DDO:
+           mDeviceFacade = new DDOFascade(context);
+		     break;
+
+	     case MOCKBIKE:
+		     mDeviceFacade = new DDOFascade(context);
+		     break;
+     }
+	}
 
 	private void broadcastUpdate(final String action) {
 		final Intent intent = new Intent(action);
@@ -217,12 +227,13 @@ public class BluetoothLeService extends Service {
 			return false;
 		}
 
+
 		// Previously connected device.  Try to reconnect.
 		if (mBluetoothDeviceAddress != null && address.equals(mBluetoothDeviceAddress)
 				&& mBluetoothGatt != null) {
 			Log.d(TAG, "Trying to use an existing mBluetoothGatt for connection.");
 			if (mBluetoothGatt.connect()) {
-				mConnectionState = STATE_CONNECTING;
+				mConnectionState = Constants.State.CONNECTING;
 				return true;
 			} else {
 				return false;
@@ -239,7 +250,7 @@ public class BluetoothLeService extends Service {
 		mBluetoothGatt = device.connectGatt(this, false, mGattCallback);
 		Log.d(TAG, "Trying to create a new connection.");
 		mBluetoothDeviceAddress = address;
-		mConnectionState = STATE_CONNECTING;
+		mConnectionState = Constants.State.CONNECTING;
 		return true;
 	}
 
@@ -279,10 +290,10 @@ public class BluetoothLeService extends Service {
 	 */
 	public void sendValueReadNotification() {
 
-		BluetoothGattCharacteristic chara = mBluetoothGatt.getService(UUID.fromString(Address.Rfduino.SERVICE)).getCharacteristic(
-				UUID.fromString(Address.Rfduino.Characteristic.RECEIVE));
+		BluetoothGattCharacteristic chara = mBluetoothGatt.getService(UUID.fromString(Constants.Address.Rfduino.SERVICE)).getCharacteristic(
+				UUID.fromString(Constants.Address.Rfduino.Characteristic.RECEIVE));
 
-		Log.v(TAG, "sendValueReadNotification " + chara.getUuid() + " "+ chara.getValue());
+		Log.v(TAG, "sendValueReadNotification " + chara.getUuid() + " " + chara.getValue());
 
 		mBluetoothGatt.readCharacteristic(chara);
 	}
@@ -376,21 +387,69 @@ public class BluetoothLeService extends Service {
 		return super.onUnbind(intent);
 	}
 
-	public abstract class Address {
-		abstract class Rfduino {
-			static final String SERVICE = "00002220-0000-1000-8000-00805f9b34fb";
+	/**
+	 * Definitions for service consumer
+	 */
+	public abstract class Constants {
 
-			abstract class Characteristic {
-				static final String RECEIVE = "00002221-0000-1000-8000-00805f9b34fb";
-			}
+		/**
+		 * Attribute names for broadcast intent extra data
+		 */
+		public abstract class Broadcast {
+			public final static String DATA =
+					"de.egh.dynamodrivenodometer.Broadcast.DATA";
+
+			public final static String DEVICE =
+					"de.egh.dynamodrivenodometer.Broadcast.DEVICE";
 		}
+
+		/**
+		 * Definitions for all GATT actions
+		 */
+		public abstract class Actions {
+
+			public final static String ACTION_GATT_CONNECTED =
+					"de.egh.dynamodrivenodometer.ACTION_GATT_CONNECTED";
+			public final static String ACTION_GATT_DISCONNECTED =
+					"de.egh.dynamodrivenodometer.ACTION_GATT_DISCONNECTED";
+			public final static String ACTION_GATT_SERVICES_DISCOVERED =
+					"de.egh.dynamodrivenodometer.ACTION_GATT_SERVICES_DISCOVERED";
+			public final static String ACTION_VALUE_AVAILABLE =
+					"de.egh.dynamodrivenodometer.ACTION_VALUE_AVAILABLE";
+			public final static String ACTION_MESSAGE_AVAILABLE =
+					"de.egh.dynamodrivenodometer.ACTION_MESSAGE_AVAILABLE";
+			public final static String ACTION_BLUETOOTH_NEEDED =
+					"de.egh.dynamodrivenodometer.ACTION_BLUETOOTH_NEEDED";
+		}
+
+		/** State */
+		private abstract class State {
+			private static final int DISCONNECTED = 0;
+			private static final int CONNECTING = 1;
+			private static final int CONNECTED = 2;
+		}
+
+		/** Device addresses */
+		private abstract class Address {
+			private abstract class Rfduino {
+				private static final String SERVICE = "00002220-0000-1000-8000-00805f9b34fb";
+
+				private abstract class Characteristic {
+					private static final String RECEIVE = "00002221-0000-1000-8000-00805f9b34fb";
+				}
+			}
+	}
+
+
+
 
 	}
 
 	public class LocalBinder extends Binder {
-		BluetoothLeService getService() {
-			return BluetoothLeService.this;
+		DeviceService getService() {
+			return DeviceService.this;
 		}
 	}
+
 
 }

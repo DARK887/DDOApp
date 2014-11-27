@@ -15,9 +15,13 @@
     <string name="msgBleNotSupported">BLE is not supported</string>
     <string name="msgBluetoothNotSupported">Bluetooth not supported</string>
     <string name="menuScan">Scan</string>
-    <string name="menuScan">Scan</string>
     <string name="gattConnectedTrue">Gatt on</string>
     <string name="gattConnectedFalse">Gatt off</string>
-    <string name="switchPermanentLabel">Permanet</string>
+    <string name="connectSwitchLabel">Connect</string>
+    <string name="menuBike1">DDO</string>
+    <string name="menuBike2">Mockbike</string>
+    <string name="deviceTypeDDO">DDO</string>
+    <string name="deviceTypeMockbike">Mockbike</string>
+
 
 </resources>
