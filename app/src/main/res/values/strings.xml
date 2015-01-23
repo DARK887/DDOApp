@@ -10,8 +10,8 @@
     <string name="unitValueDefault">KM</string>
     <string name="distanceValueDefault">---.---</string>
     <string name="connectedToLabel">Device</string>
-    <string name="lastUpdateLabel">Last update</string>
-    <string name="lastUpdate">---</string>
+    <string name="lastUpdateLabel">From</string>
+    <string name="lastUpdateDefault">never</string>
     <string name="messageDefault">No messages</string>
     <string name="msgBleNotSupported">BLE is not supported</string>
     <string name="msgBluetoothNotSupported">Bluetooth not supported</string>
@@ -21,6 +21,6 @@
     <string name="menuDemo">Demo on</string>
     <string name="menuDemoActive">Demo off</string>
     <string name="messageBluetoothNotOn">Bluetooth not active, can not scan.</string>
-    <string name="deviceNameDDO">DDO</string>
-    <string name="deviceNameDummy">Dummy Device</string>
+    <string name="nameDDO">DDO</string>
+    <string name="nameDummy">Dummy Device</string>
 </resources>

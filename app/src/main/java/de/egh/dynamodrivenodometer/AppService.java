@@ -16,81 +16,99 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.util.Log;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Created by ChristianSchulzendor on 05.08.2014.
+ * Manage all connection stuff to a device or dummy device.
  */
 public class AppService extends Service {
 
+
 	private final static String TAG = AppService.class.getSimpleName();
 	private final IBinder mBinder = new LocalBinder();
-
+	/** Is TRUE, when mock device is used */
+	boolean mDemo;
 	private BluetoothManager mBluetoothManager;
 	private BluetoothAdapter mBluetoothAdapter;  // Implements callback methods for GATT events that the app cares about.  For example,
+	private String mDeviceAddress;
+	/** Access to GATT */
+	private BluetoothGatt mBluetoothGatt;
+	//For timer-driven actions
+	private Handler mHandler;
+	private BluetoothDevice mBTDevice;
+	/** Stops scan after given period */
+	private Runnable runnableStopScan;
+	/** True while in device scanning mode */
+	private boolean mScanning;
+	/** The connected device */
+	private BluetoothDevice dodDevice;
+	/** TRUE, if connected to an device. */
+	private boolean mConnected;
 	// connection change and services discovered.
 	private final BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
 
 		@Override
 		public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
 
-			String intentAction;
-
-			if (newState == BluetoothProfile.STATE_CONNECTED) {
-				Log.i(TAG, "Connected to GATT server.");
-				// Attempts to discover services after successful connection.
-				Log.i(TAG, "Attempting to start service discovery:" +
-						mBluetoothGatt.discoverServices());
-			} else {
-				if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-					Log.i(TAG, "Disconnected from GATT server.");
+			switch (newState) {
+				case BluetoothProfile.STATE_CONNECTED:
+					Log.i(TAG, "Gatt: STATE_CONNECTED");
+					// Attempts to discover services after successful connection.
+					Log.i(TAG, "Attempting to start service discovery:" +
+							mBluetoothGatt.discoverServices());
+					break;
+				case BluetoothProfile.STATE_CONNECTING:
+					Log.i(TAG, "Gatt: STATE_CONNECTING");
+					break;
+				case BluetoothProfile.STATE_DISCONNECTING:
+					Log.i(TAG, "Gatt: STATE_DISCONNECTING");
+					break;
+				case BluetoothProfile.STATE_DISCONNECTED:
+					Log.i(TAG, "Gatt: STATE_DISCONNECTED");
 					AppService.this.broadcastUpdate(Constants.Actions.NOT_CONNECTED);
-				}
+					break;
+				default:
+					Log.i(TAG, "Unknown BluetoothProfile state=" + newState);
+					break;
+
 			}
 		}
 
 		@Override
+		/** Called only when status == BluetoothGatt.GATT_SUCCESS */
 		public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-			if (status == BluetoothGatt.GATT_SUCCESS) {
-				mConnected = true;
-				AppService.this.broadcastUpdate(Constants.Actions.CONNECTED);
-			} else {
-				Log.w(TAG, "onServicesDiscovered received: " + status);
+			Log.v(TAG, "onServicesDiscovered()");
+
+			if (status != BluetoothGatt.GATT_SUCCESS) {
+				Log.w(TAG, "Unexpected status= " + status);
+				return;
 			}
+
+			mConnected = true;
+			AppService.this.broadcastUpdate(Constants.Actions.CONNECTED);
 		}
 
-		private void broadcastUpdate(final String action,
-		                             final BluetoothGattCharacteristic characteristic) {
+		private void broadcastCharacteristic(final String action,
+		                                     final BluetoothGattCharacteristic characteristic) {
 			final Intent intent = new Intent(action);
 
 			// For all other profiles, writes the data formatted in HEX.
 			final byte[] data = characteristic.getValue();
 			if (data != null && data.length > 0) {
 
-				Log.v(TAG, "broadcastUpdate Byte[] data=" + data); //Should be "D" + <Distance in mm>
+				Log.v(TAG, "broadcastCharacteristic Byte[] data=" + Arrays.toString(data)); //Should be "D" + <Distance in mm>
 				final StringBuilder sb = new StringBuilder(data.length);
 				for (byte byteChar : data) {
 					if (byteChar != 0x00) {
 						char c = (char) (byteChar & 0xFF);
-						//Log.v(TAG, "c=" + c);
 						sb.append(c);
 					}
 				}
+				Log.v(TAG, "broadcastCharacteristic String=" + sb.toString()); //Should be "D" + <Distance in mm>
 				intent.putExtra(Constants.EXTRA_DATA, sb.toString());
-				Log.v(TAG, "broadcastUpdate String=" + sb.toString()); //Should be "D" + <Distance in mm>
-
-//				final StringBuilder stringBuilder = new StringBuilder(data.length);
-//				for (byte byteChar : data) {
-//					stringBuilder.append(String.format("%02X ", byteChar));
-//				}
-//				intent.putExtra(EXTRA_DATA, new String(data) + "\n" + stringBuilder.toString());
-
-				// For all other profiles, writes the data formatted in HEX.
-				//		intent.putExtra(EXTRA_DATA, data);
-				//	Log.v(TAG, "broadcastUpdate String=" + data); //Should be "D" + <Distance in mm>
-
-				sendBroadcast(intent);
+        AppService.this.broadcastUpdate(intent);
 			}
 		}
 
@@ -100,46 +118,32 @@ public class AppService extends Service {
 		                                 int status) {
 			Log.v(TAG, "onCharacteristicRead()");
 			if (status == BluetoothGatt.GATT_SUCCESS) {
-				Log.v(TAG, "Characteristic value: " + characteristic.getValue());
-				broadcastUpdate(Constants.Actions.DATA_AVAILABLE, characteristic);
+				Log.v(TAG, "Characteristic value: " + Arrays.toString(characteristic.getValue()));
+				broadcastCharacteristic(Constants.Actions.DATA_AVAILABLE, characteristic);
 			}
 		}
 
 		@Override
 		public void onCharacteristicChanged(BluetoothGatt gatt,
 		                                    BluetoothGattCharacteristic characteristic) {
-			broadcastUpdate(Constants.Actions.DATA_AVAILABLE, characteristic);
+			broadcastCharacteristic(Constants.Actions.DATA_AVAILABLE, characteristic);
 		}
 
 	};
 
+/** Use this or the other broadcastUpdate method for broadcasting. */
 	private void broadcastUpdate(final String action) {
 		Log.v(TAG, "broadcastUpdate " + action);
 		final Intent intent = new Intent(action);
-		sendBroadcast(intent);
+		broadcastUpdate(intent);
 	}
 
-	private void broadcastDevice() {
-		Log.v(TAG, "broadcastDevice " + mDemo);
-		final Intent intent = new Intent(Constants.Actions.DEVICE);
-
-		if (mDemo) {
-			intent.putExtra(Constants.EXTRA_DATA, Constants.Devices.DUMMY_DEVICE);
-		} else {
-			intent.putExtra(Constants.EXTRA_DATA, Constants.Devices.NAME);
-		}
-
+	/** Use this or the other broadcastUpdate method for broadcasting. */
+	private void broadcastUpdate(Intent intent){
+		intent.putExtra(Constants.EXTRA_DEVICE_NAME, mDemo ? Constants.Devices.DUMMY_DEVICE : Constants.Devices.NAME);
+		intent.putExtra(Constants.EXTRA_IS_DEMO, mDemo);
 		sendBroadcast(intent);
 	}
-
-	private String mDeviceAddress;
-
-	/** Access to GATT */
-	private BluetoothGatt mBluetoothGatt;
-
-	//For timer-driven actions
-	private Handler mHandler;
-	private BluetoothDevice mBTDevice;
 
 	/**
 	 * Connects to the GATT server hosted on the Bluetooth LE device. To mock a device, it can also
@@ -171,6 +175,7 @@ public class AppService extends Service {
 			// Broadcast this
 			mBluetoothGatt = null;
 			mConnected = true;
+
 			broadcastUpdate(Constants.Actions.CONNECTED);
 			return true;
 		}
@@ -178,7 +183,7 @@ public class AppService extends Service {
 		//Normal device mode
 		Log.v(TAG, "connecting BT device");
 
-		if (mBluetoothAdapter == null || address == null) {
+		if (mBluetoothAdapter == null) {
 			Log.w(TAG, "BluetoothAdapter not initialized or unspecified address.");
 			return false;
 		}
@@ -187,18 +192,11 @@ public class AppService extends Service {
 		if (mDeviceAddress != null && address.equals(mDeviceAddress)
 				&& mBluetoothGatt != null) {
 			Log.d(TAG, "Trying to use an existing mBluetoothGatt for connection.");
-			if (mBluetoothGatt.connect()) {
-				return true;
-			} else {
-				return false;
-			}
+			return mBluetoothGatt.connect();
 		}
 
 		mBTDevice = mBluetoothAdapter.getRemoteDevice(address);
-		if (mBTDevice == null) {
-			Log.w(TAG, "Device not found.  Unable to connect.");
-			return false;
-		}
+
 		// We want to directly connect to the device, so we are setting the autoConnect
 		// parameter to false.
 		mBluetoothGatt = mBTDevice.connectGatt(this, false, mGattCallback);
@@ -258,7 +256,7 @@ public class AppService extends Service {
 		if (mDeviceAddress.equals(Constants.Devices.DUMMY_DEVICE)) {
 			final Intent intent = new Intent(Constants.Actions.DATA_AVAILABLE);
 			intent.putExtra(Constants.EXTRA_DATA, Constants.Datatypes.DISTANCE + String.valueOf(System.currentTimeMillis()));
-			sendBroadcast(intent);
+			broadcastUpdate(intent);
 			return true;
 		}
 
@@ -271,7 +269,7 @@ public class AppService extends Service {
 			BluetoothGattCharacteristic chara = mBluetoothGatt.getService(UUID.fromString(Constants.Address.Rfduino.SERVICE)).getCharacteristic(
 					UUID.fromString(Constants.Address.Rfduino.Characteristic.RECEIVE));
 
-			Log.v(TAG, "readValue " + chara.getUuid() + " " + chara.getValue());
+			Log.v(TAG, "readValue " + chara.getUuid() + " " + Arrays.toString(chara.getValue()));
 
 			mBluetoothGatt.readCharacteristic(chara);
 		}
@@ -283,6 +281,9 @@ public class AppService extends Service {
 		}
 		return true;
 	}
+
+//	/** Let the service alive for a while after unbinding */
+//	private Runnable runnableAlive;
 
 	/**
 	 * Retrieves a list of supported GATT services on the connected device. This should be invoked
@@ -307,14 +308,15 @@ public class AppService extends Service {
 	public void disconnect() {
 		Log.v(TAG, "disconnect()for device " + mDeviceAddress);
 
-		// Nothing to disconnect
-		if (mDeviceAddress == null) {
-			return;
-		}
+
+//		// Nothing to disconnect
+//		if (mDeviceAddress == null) {
+//			return;
+//		}
 
 
 		// Dummy device
-		if (mDeviceAddress.equals(Constants.Devices.DUMMY_DEVICE)) {
+		if (mDeviceAddress != null && mDeviceAddress.equals(Constants.Devices.DUMMY_DEVICE)) {
 			mDeviceAddress = null;
 			return;
 		}
@@ -328,16 +330,16 @@ public class AppService extends Service {
 
 		// Keine Ahnung, ob hiermit der GattCallback tot gemacht wird oder ob der
 		// Disconnectaufruf noch kommt.
-		closeBT();
+		closeGatt();
 		mDeviceAddress = null;
 	}
 
 	@Override
 	public void onDestroy() {
-		Log.v(TAG,"onDestroy()");
+		Log.v(TAG, "onDestroy()");
 
+		closeGatt();
 		disconnect();
-		closeBT();
 		super.onDestroy();
 	}
 
@@ -364,7 +366,7 @@ public class AppService extends Service {
 		}
 
 		//Send actual status to app
-		broadcastDevice();
+		broadcastUpdate(Constants.Actions.DEVICE);
 
 		if (mConnected) {
 			broadcastUpdate(Constants.Actions.CONNECTED);
@@ -378,29 +380,8 @@ public class AppService extends Service {
 
 
 		return true;
-	}
+	}  // Device scan callback.
 
-	@Override
-	public IBinder onBind(Intent intent) {
-		Log.v(TAG, "onBind()");
-		//Remove killer
-//		mHandler.removeCallbacks(runnableAlive);
-		return mBinder;
-	}
-
-//	/** Let the service alive for a while after unbinding */
-//	private Runnable runnableAlive;
-
-	/** Stops scan after given period */
-	private Runnable runnableStopScan;
-
-	/** True while in device scanning mode */
-	private boolean mScanning;
-
-	/** The connected device */
-	private BluetoothDevice dodDevice;
-
-	// Device scan callback.
 	private BluetoothAdapter.LeScanCallback mLeScanCallback =
 			new BluetoothAdapter.LeScanCallback() {
 
@@ -424,9 +405,13 @@ public class AppService extends Service {
 				}
 			};
 
-
-	/** Is TRUE, when mock device is used */
-	boolean mDemo;
+	@Override
+	public IBinder onBind(Intent intent) {
+		Log.v(TAG, "onBind()");
+		//Remove killer
+//		mHandler.removeCallbacks(runnableAlive);
+		return mBinder;
+	}
 
 	/**
 	 * Call this to start the scan mode.
@@ -437,13 +422,15 @@ public class AppService extends Service {
 		mScanning = true;
 		mDemo = demo;
 
+		//Delete active broadcast
+		mHandler.removeCallbacks(runnableStopScan);
+
 		if (demo) {
 
 			// Automatically connects to the device upon successful start-up initialization.
 			dodDevice = null;
 			//Don't send 'Scanning' here (broadcast can be passed by the next one)
-			broadcastUpdate(Constants.Actions.CONNECTED);
-			connect(Constants.Devices.DUMMY_DEVICE);
+		connect(Constants.Devices.DUMMY_DEVICE);
 
 		} else
 
@@ -488,9 +475,9 @@ public class AppService extends Service {
 		mConnected = false;
 	}
 
-	/** Close BT connection to device */
-	private void closeBT() {
-		Log.v(TAG, "closeBT()");
+	/** Close BT Gatt client connection to device */
+	private void closeGatt() {
+		Log.v(TAG, "closeGatt()");
 
 		mScanning = false;
 		if (mBluetoothGatt == null) {
@@ -530,31 +517,25 @@ public class AppService extends Service {
 		return super.onUnbind(intent);
 	}
 
-	/** TRUE, if connected to an device. */
-	private boolean mConnected;
-
 	/** Constants for the service consumer to use. */
 	public abstract class Constants {
 
-		abstract class Service {
-			static final long ALIVE_MS = 2000;
-		}
+		public final static String EXTRA_DATA =
+				"de.egh.dynamodrivenodometer.EXTRA_DATA";
+		public final static String EXTRA_DEVICE_NAME =
+				"de.egh.dynamodrivenodometer.EXTRA_DEVICE_NAME";
+		public final static String EXTRA_IS_DEMO =
+				"de.egh.dynamodrivenodometer.EXTRA_IS_DEMO";
 
 		abstract class SharedPrefs {
 			static final String NAME = "DOD";
-			static final String DISTANCE = "DISTANCE";
-			static final String LAST_UPDATE_AT = "LAST_UPDATE_AT";
-			static final String MESSAGES = "MESSAGES";
 			static final String DEMO = "DEMO";
 		}
 
 		public abstract class Devices {
-			static final String NAME = "DDO";
 			public static final String DUMMY_DEVICE = "DUMMY_DEVICE";
+			static final String NAME = "DDO";
 		}
-
-		public final static String EXTRA_DATA =
-				"de.egh.dynamodrivenodometer.EXTRA_DATA";
 
 		/** Prexif values of payload content received by the device. */
 		public abstract class Datatypes {
