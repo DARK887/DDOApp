@@ -32,6 +32,8 @@ import de.egh.dynamodrivenodometer.MessageBox;
 
 public class MainActivity extends ActionBarActivity {
 
+	/** Broadcasts have no order. */
+	private long lastBroadcast = 0;
 
 	// This deviceName must be set in the RFDuino
 	private static final String TAG = MainActivity.class.getSimpleName();
@@ -43,25 +45,37 @@ public class MainActivity extends ActionBarActivity {
 		public void onReceive(Context context, Intent intent) {
 			//		Log.v(TAG, "onReceive() ...");
 			final String action = intent.getAction();
+			long timestamp = intent.getLongExtra(AppService.Constants.EXTRA_TIMESTAMP, 0);
 			boolean isDemo = intent.getBooleanExtra(AppService.Constants.EXTRA_IS_DEMO, false);
 			String deviceName = intent.getStringExtra(AppService.Constants.EXTRA_DEVICE_NAME);
+
+			//Ignore old messages. That's not really fine...
+			if (timestamp < lastBroadcast) {
+				Log.v(TAG, "Received broadcast is to old, ignoring: " + timestamp + "/" + deviceName + "/" + action + "/" + isDemo);
+				return;
+			}
+
 
 			//Ignore event for previous device
 			switch (mActualDevice.getScreenNr()) {
 				case Constants.LIVE_SCREEN_NR:
 					if (isDemo) {
+						Log.v(TAG, "Received broadcast for wrong screen, ignoring: " + timestamp + "/" + deviceName + "/" + action + "/" + isDemo);
 						return;
 					}
 					break;
 				case Constants.DEMO_SCREEN_NR:
 					if (!isDemo) {
+						Log.v(TAG, "Received broadcast for wrong screen, ignoring: " + timestamp + "/" + deviceName + "/" + action + "/" + isDemo);
 						return;
 					}
 					break;
 				default:
-					Log.e(TAG, "Enexpected screen number=" + mActualDevice.getScreenNr());
+					Log.e(TAG, "Unexpected screen number=" + mActualDevice.getScreenNr());
 					return;
 			}
+
+			Log.v(TAG, "Received broadcast: " + timestamp + "/" + deviceName + "/" + action + "/" + isDemo);
 
 			// Status change to connected
 			switch (action) {
@@ -138,14 +152,9 @@ public class MainActivity extends ActionBarActivity {
 			// We want service to alive after unbinding to hold the actual status
 //			startService(new Intent(MainActivity.this, AppService.class));
 
-			if (!mService.initialize()) {
-				Log.e(TAG, "Unable to initialize Bluetooth");
-				finish();
-			}
-
+			mService.broadcastStatus();
 
 			startScanning();
-
 
 		}
 
@@ -328,9 +337,12 @@ public class MainActivity extends ActionBarActivity {
 		editor.putInt(Constants.SharedPrefs.ACTUAL_DEVICE_SCREEN_NR, mActualDevice.getScreenNr());
 		editor.apply();
 
-		//Wenn hier disconnected, muss man in onResume wieder connecten !?
+		if (mRunnableValueReadJob != null) {
+			mHandler.removeCallbacks(mRunnableValueReadJob);
+		}
+
 		if (mService != null) {
-			mService.disconnect();
+			mService.closeDeviceConnection();
 		}
 
 		unregisterReceiver(mBroadcastReceiver);
@@ -370,16 +382,20 @@ public class MainActivity extends ActionBarActivity {
 	}
 
 	/**
-	 * Call this to switch to scanning mode. UI will not be updated.
+	 * Call this to switch to scanning mode. UI will not be updated. App will be finished, if BT could
+	 * not be established.
 	 */
 	private void startScanning() {
 		Log.v(TAG, "startScanning()");
 
-		if (mActualDevice.getScreenNr() == Constants.LIVE_SCREEN_NR && mBluetoothAdapter.getState() == BluetoothAdapter.STATE_OFF) {
+		if (mActualDevice.getScreenNr() == Constants.LIVE_SCREEN_NR && !mBluetoothAdapter.isEnabled()) {
 			Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
 			startActivityForResult(enableBtIntent, Constants.Bluetooth.REQUEST_ENABLE_BT);
 		} else if (mService != null) {
-			mService.scanDevice(mActualDevice.getScreenNr() == Constants.DEMO_SCREEN_NR);
+			if (!mService.scanDevice(mActualDevice.getScreenNr() == Constants.DEMO_SCREEN_NR)) {
+				Log.e(TAG, "Unable to start Bluetooth");
+				finish();
+			}
 		}
 
 	}
@@ -430,7 +446,7 @@ public class MainActivity extends ActionBarActivity {
 	/** Event for big colored button. */
 	public void onClickConnectButton(View view) {
 		Log.v(TAG, "onClickConnectButton");
-		mService.disconnect();
+		mService.closeDeviceConnection();
 		startScanning();
 		updateUI();
 
